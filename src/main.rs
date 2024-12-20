@@ -7,9 +7,24 @@ fn match_pattern(input_line: &str, pattern: &str) -> bool {
         input_line.contains(pattern)
     } else if pattern == "\\d" {
         match_single_digit(input_line)
+    } else if pattern == "\\w" {
+        match_alphanumeric(input_line)
     } else {
         panic!("Unhandled pattern: {}", pattern)
     }
+}
+
+fn match_alphanumeric(input_line: &str) -> bool {
+    let lower_chars = "abcdefghijklmnopqrstuvwxyz";
+    let upper_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let digits = "0123456789";
+
+    let mut alpha_nums = lower_chars.to_string();
+    alpha_nums.push_str(&upper_chars);
+    alpha_nums.push_str(&digits);
+    alpha_nums.push('_');
+
+    alpha_nums.chars().any(|ch| input_line.contains(ch))
 }
 
 fn match_single_digit(input_line: &str) -> bool {
