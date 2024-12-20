@@ -9,9 +9,23 @@ fn match_pattern(input_line: &str, pattern: &str) -> bool {
         match_single_digit(input_line)
     } else if pattern == "\\w" {
         match_alphanumeric(input_line)
+    } else if let Some('[') = pattern.chars().nth(0) {
+        match_group(input_line, pattern)
     } else {
         panic!("Unhandled pattern: {}", pattern)
     }
+}
+
+fn match_group(input_line: &str, pattern: &str) -> bool {
+    if pattern.chars().count() < 2 {
+        return false;
+    }
+    let num_chars = pattern.chars().count() - 2;
+
+    pattern.chars()
+        .skip(1)
+        .take(num_chars)
+        .any(|ch| input_line.contains(ch))
 }
 
 fn match_alphanumeric(input_line: &str) -> bool {
