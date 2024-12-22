@@ -20,12 +20,24 @@ fn match_group(input_line: &str, pattern: &str) -> bool {
     if pattern.chars().count() < 2 {
         return false;
     }
-    let num_chars = pattern.chars().count() - 2;
 
-    pattern.chars()
-        .skip(1)
-        .take(num_chars)
-        .any(|ch| input_line.contains(ch))
+    let is_neg_group = pattern.chars().nth(1).unwrap() == '^';
+
+    if !is_neg_group {
+        let num_chars = pattern.chars().count() - 2;
+        pattern
+            .chars()
+            .skip(1)
+            .take(num_chars)
+            .any(|ch| input_line.contains(ch))
+    } else {
+        let num_chars = input_line.chars().count() - 3;
+        !pattern
+            .chars()
+            .skip(2)
+            .take(num_chars)
+            .any(|ch| input_line.contains(ch))
+    }
 }
 
 fn match_alphanumeric(input_line: &str) -> bool {
