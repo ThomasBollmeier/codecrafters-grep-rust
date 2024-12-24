@@ -1,62 +1,22 @@
 use std::env;
 use std::io;
 use std::process;
+use codecrafters_grep::matcher::*;
 
 fn match_pattern(input_line: &str, pattern: &str) -> bool {
-    if pattern.chars().count() == 1 {
-        input_line.contains(pattern)
+    let matcher: Box<dyn Matcher> = if pattern.chars().count() == 1 {
+        Box::new(SingleCharMatcher::new(pattern.chars().next().unwrap()))
     } else if pattern == "\\d" {
-        match_single_digit(input_line)
+        Box::new(make_digit_matcher())
     } else if pattern == "\\w" {
-        match_alphanumeric(input_line)
+        Box::new(make_alpha_num_matcher())
     } else if let Some('[') = pattern.chars().nth(0) {
-        match_group(input_line, pattern)
+        Box::new(make_group_matcher(pattern))
     } else {
-        panic!("Unhandled pattern: {}", pattern)
-    }
-}
+        Box::new(SequenceMatcher::from_pattern(pattern).expect("invalid pattern"))
+    };
 
-fn match_group(input_line: &str, pattern: &str) -> bool {
-    if pattern.chars().count() < 2 {
-        return false;
-    }
-
-    let is_neg_group = pattern.chars().nth(1).unwrap() == '^';
-
-    if !is_neg_group {
-        let num_chars = pattern.chars().count() - 2;
-        pattern
-            .chars()
-            .skip(1)
-            .take(num_chars)
-            .any(|ch| input_line.contains(ch))
-    } else {
-        let num_chars = input_line.chars().count() - 3;
-        !pattern
-            .chars()
-            .skip(2)
-            .take(num_chars)
-            .any(|ch| input_line.contains(ch))
-    }
-}
-
-fn match_alphanumeric(input_line: &str) -> bool {
-    let lower_chars = "abcdefghijklmnopqrstuvwxyz";
-    let upper_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    let digits = "0123456789";
-
-    let mut alpha_nums = lower_chars.to_string();
-    alpha_nums.push_str(&upper_chars);
-    alpha_nums.push_str(&digits);
-    alpha_nums.push('_');
-
-    alpha_nums.chars().any(|ch| input_line.contains(ch))
-}
-
-fn match_single_digit(input_line: &str) -> bool {
-    ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
-        .iter()
-        .any(|&digit| input_line.contains(digit))
+    matcher.matches(input_line)
 }
 
 // Usage: echo <input_text> | your_program.sh -E <pattern>
