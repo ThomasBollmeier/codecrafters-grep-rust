@@ -2,9 +2,23 @@ use anyhow::*;
 
 pub trait Matcher {
     fn matches(&self, text: &str) -> bool {
-        self.find_match(text, None).is_some()
+        self.find_match(text).is_some()
     }
-    fn find_match(&self, text: &str, offset: Option<usize>) -> Option<Match>;
+
+    fn check_match(&self, text: &str, offset: usize) -> Option<String>;
+
+    fn find_match(&self, text: &str) -> Option<Match> {
+        for offset in 0..text.chars().count() {
+            match self.check_match(text, offset) {
+                Some(matched_text) => return Some(Match {
+                    matched_text,
+                    offset,
+                }),
+                None => continue,
+            }
+        }
+        None
+    }
 }
 
 pub struct Match {
@@ -27,35 +41,15 @@ impl Matcher for SingleCharMatcher {
         text.contains(self.ch)
     }
 
-    fn find_match(&self, text: &str, offset: Option<usize>) -> Option<Match> {
-        match offset {
-            None => {
-                let ch_opt = text.chars()
-                    .enumerate()
-                    .find(|c| self.ch == c.1 );
-
-                match ch_opt {
-                    Some((offset, ch)) => Some(Match {
-                        matched_text: ch.to_string(),
-                        offset,
-                    }),
-                    None => None,
-                }
-            }
-            Some(offset) => {
-                let ch_opt = text
-                    .chars()
-                    .nth(offset)
-                    .filter(|c| self.ch == *c );
-
-                match ch_opt {
-                    Some(ch) => Some(Match {
-                        matched_text: ch.to_string(),
-                        offset,
-                    }),
-                    None => None,
-                }
-            }
+    fn check_match(&self, text: &str, offset: usize) -> Option<String> {
+        if text.len() < offset {
+            return None;
+        }
+        let ch = text.chars().nth(offset).unwrap();
+        if ch == self.ch {
+            Some(ch.to_string())
+        } else {
+            None
         }
     }
 }
@@ -72,64 +66,30 @@ impl SingleCharBranchMatcher {
 }
 
 impl Matcher for SingleCharBranchMatcher {
-    fn find_match(&self, text: &str, offset: Option<usize>) -> Option<Match> {
+    fn check_match(&self, text: &str, offset: usize) -> Option<String> {
         if !self.is_negated {
-            match offset {
-                Some(offset) => match text.chars().nth(offset) {
-                        Some(ch) => {
-                            for c in &self.characters {
-                                if *c == ch {
-                                    return Some(Match{
-                                        matched_text: ch.to_string(),
-                                        offset,
-                                    })
-                                }
-                            }
-                            None
-                        }
-                        None => None,
-                    }
-                None => {
-                    for (offset, ch) in text.chars().enumerate() {
-                        for c in &self.characters {
-                            if *c == ch {
-                                return Some(Match{
-                                    matched_text: ch.to_string(),
-                                    offset,
-                                })
-                            }
+            match text.chars().nth(offset) {
+                Some(ch) => {
+                    for c in &self.characters {
+                        if *c == ch {
+                            return Some(ch.to_string());
                         }
                     }
                     None
                 }
+                None => None,
             }
         } else {
-            match offset {
-                Some(offset) => match text.chars().nth(offset) {
-                    Some(ch) => {
-                        for c in &self.characters {
-                            if *c == ch {
-                                return None;
-                            }
-                        }
-                        Some(Match{
-                            matched_text: ch.to_string(),
-                            offset,
-                        })
-                    }
-                    None => None,
-                }
-                None => {
-                    for (offset, ch) in text.chars().enumerate() {
-                        if !self.characters.contains(&ch) {
-                            return Some(Match {
-                                matched_text: ch.to_string(),
-                                offset,
-                            });
+            match text.chars().nth(offset) {
+                Some(ch) => {
+                    for c in &self.characters {
+                        if *c == ch {
+                            return None;
                         }
                     }
-                    None
+                    Some(ch.to_string())
                 }
+                None => None,
             }
         }
     }
@@ -232,33 +192,20 @@ impl SequenceMatcher {
 }
 
 impl Matcher for SequenceMatcher {
-    fn find_match(&self, text: &str, offset: Option<usize>) -> Option<Match> {
+    fn check_match(&self, text: &str, offset: usize) -> Option<String> {
         let mut curr_offset = offset;
         let mut matched_text = String::new();
-        let mut start_offset: Option<usize> = None;
 
         for element in &self.elements {
-            match element.find_match(text, curr_offset) {
-                Some(matched) => {
-                    matched_text.push_str(&matched.matched_text);
-                    if start_offset.is_none() {
-                        start_offset = Some(matched.offset);
-                    }
-                    curr_offset = Some(matched.offset + matched.matched_text.len());
-                },
+            match element.check_match(text, curr_offset) {
+                Some(m_text) => {
+                    matched_text.push_str(&m_text);
+                    curr_offset += m_text.chars().count();
+                }
                 None => return None,
             }
         }
-
-        match start_offset {
-            Some(start_offset) => {
-                Some(Match {
-                    matched_text,
-                    offset: start_offset,
-                })
-            }
-            None => None,
-        }
+        Some(matched_text)
     }
 }
 
@@ -271,7 +218,7 @@ mod tests {
         let text = "banana";
         let matcher = make_group_matcher("[^anb]");
 
-        assert!(matcher.find_match(text, None).is_none());
+        assert!(matcher.find_match(text).is_none());
     }
 
     #[test]
@@ -280,8 +227,22 @@ mod tests {
         let pattern = r"\d apples";
 
         let matcher = SequenceMatcher::from_pattern(pattern).unwrap();
-        let m_opt = matcher.find_match(text, None);
+        let m_opt = matcher.find_match(text);
 
         assert!(m_opt.is_some());
+    }
+
+    #[test]
+    fn sequence_matcher_works() {
+        let text = "babanana";
+        let pattern = "ban";
+
+        let matcher = SequenceMatcher::from_pattern(pattern).unwrap();
+        let m_opt = matcher.find_match(text);
+
+        assert!(m_opt.is_some());
+        let m = m_opt.unwrap();
+        assert_eq!(m.matched_text, "ban");
+        assert_eq!(m.offset, 2);
     }
 }
