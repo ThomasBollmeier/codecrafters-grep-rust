@@ -72,6 +72,25 @@ impl Matcher for StartMatcher {
     }
 }
 
+pub struct EndMatcher {}
+
+impl EndMatcher {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Matcher for EndMatcher {
+    fn check_match(&self, text: &str, offset: usize) -> Option<String> {
+        if offset == text.len() {
+            Some("".to_string())
+        } else {
+            None
+        }
+    }
+}
+
+
 pub struct SingleCharBranchMatcher {
     characters: Vec<char>,
     is_negated: bool,
@@ -202,6 +221,12 @@ impl SequenceMatcher {
                     i += 1;
                 } else {
                     return Err(anyhow!("^ must start the pattern"));
+                }
+                '$' => if i == n-1 {
+                    matcher = Box::new(EndMatcher::new());
+                    i += 1;
+                } else {
+                    return Err(anyhow!("$ must end the pattern"));
                 }
                 _ => {
                     matcher = Box::new(SingleCharMatcher::new(ch));
