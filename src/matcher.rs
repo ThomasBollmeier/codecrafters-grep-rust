@@ -42,12 +42,30 @@ impl Matcher for SingleCharMatcher {
     }
 
     fn check_match(&self, text: &str, offset: usize) -> Option<String> {
-        if text.len() < offset {
+        if offset >= text.len() {
             return None;
         }
         let ch = text.chars().nth(offset).unwrap();
         if ch == self.ch {
             Some(ch.to_string())
+        } else {
+            None
+        }
+    }
+}
+
+pub struct StartMatcher {}
+
+impl StartMatcher {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Matcher for StartMatcher {
+    fn check_match(&self, _text: &str, offset: usize) -> Option<String> {
+        if offset == 0 {
+            Some("".to_string())
         } else {
             None
         }
@@ -178,6 +196,12 @@ impl SequenceMatcher {
                     } else {
                         return Err(anyhow!("invalid pattern"));
                     }
+                }
+                '^' => if i == 0 {
+                    matcher = Box::new(StartMatcher::new());
+                    i += 1;
+                } else {
+                    return Err(anyhow!("^ must start the pattern"));
                 }
                 _ => {
                     matcher = Box::new(SingleCharMatcher::new(ch));
