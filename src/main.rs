@@ -1,22 +1,13 @@
 use std::env;
 use std::io;
 use std::process;
-use codecrafters_grep::matcher::*;
+use codecrafters_grep::regex_parser::RegexParser;
 
 fn match_pattern(input_line: &str, pattern: &str) -> bool {
-    let matcher: Box<dyn Matcher> = if pattern.chars().count() == 1 {
-        Box::new(SingleCharMatcher::new(pattern.chars().next().unwrap()))
-    } else if pattern == "\\d" {
-        Box::new(make_digit_matcher())
-    } else if pattern == "\\w" {
-        Box::new(make_alpha_num_matcher())
-    } else if let Some('[') = pattern.chars().nth(0) {
-        Box::new(make_group_matcher(pattern))
-    } else {
-        Box::new(SequenceMatcher::from_pattern(pattern).expect("invalid pattern"))
-    };
-
-    matcher.matches(input_line)
+    match RegexParser::new(pattern).parse() {
+        Ok(matcher) => matcher.matches(&input_line),
+        Err(_) => false,
+    }
 }
 
 // Usage: echo <input_text> | your_program.sh -E <pattern>

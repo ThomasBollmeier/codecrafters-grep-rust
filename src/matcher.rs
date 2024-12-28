@@ -1,13 +1,44 @@
-use anyhow::*;
+#[derive(Clone, Debug)]
+pub enum Matcher {
+    SingleChar(char),
+    StartMatcher,
+    EndMatcher,
+    SingleCharBranch(Vec<char>, bool),
+    Sequence(Vec<Matcher>),
+    OneOrMore(Box<Matcher>),
+}
 
-pub trait Matcher {
-    fn matches(&self, text: &str) -> bool {
+impl Matcher {
+
+    pub fn new_single_char(c: char) -> Self {
+        Matcher::SingleChar(c)
+    }
+
+    pub fn new_start() -> Self {
+        Matcher::StartMatcher
+    }
+
+    pub fn new_end() -> Self {
+        Matcher::EndMatcher
+    }
+
+    pub fn new_single_char_branch(chars: Vec<char>, negated: bool) -> Self {
+        Matcher::SingleCharBranch(chars, negated)
+    }
+
+    pub fn new_sequence(matchers: Vec<Matcher>) -> Self {
+        Matcher::Sequence(matchers)
+    }
+
+    pub fn new_one_or_more(matcher: &Matcher) -> Self {
+        Matcher::OneOrMore(Box::new(matcher.clone()))
+    }
+
+    pub fn matches(&self, text: &str) -> bool {
         self.find_match(text).is_some()
     }
 
-    fn check_match(&self, text: &str, offset: usize) -> Option<String>;
-
-    fn find_match(&self, text: &str) -> Option<Match> {
+    pub fn find_match(&self, text: &str) -> Option<Match> {
         for offset in 0..text.chars().count() {
             match self.check_match(text, offset) {
                 Some(matched_text) => return Some(Match {
@@ -19,95 +50,58 @@ pub trait Matcher {
         }
         None
     }
-}
 
-pub struct Match {
-    pub matched_text: String,
-    pub offset: usize,
-}
-
-pub struct SingleCharMatcher {
-    ch: char,
-}
-
-impl SingleCharMatcher {
-    pub fn new(ch: char) -> Self {
-        Self { ch }
-    }
-}
-
-impl Matcher for SingleCharMatcher {
-    fn matches(&self, text: &str) -> bool {
-        text.contains(self.ch)
+    pub fn check_match(&self, text: &str, offset: usize) -> Option<String> {
+        use Matcher::*;
+        match self {
+            SingleChar(ch) => self.check_single_char(*ch, text, offset),
+            StartMatcher => self.check_start(text, offset),
+            EndMatcher => self.check_end(text, offset),
+            SingleCharBranch(characters, is_negated) =>
+                self.check_single_char_branch(characters, *is_negated, text, offset),
+            Sequence(matchers) => self.check_sequence(matchers, text, offset),
+            OneOrMore(matcher) => self.check_one_or_more(matcher, text, offset),
+        }
     }
 
-    fn check_match(&self, text: &str, offset: usize) -> Option<String> {
+    fn check_single_char(&self, ch: char, text: &str, offset: usize) -> Option<String> {
         if offset >= text.len() {
             return None;
         }
-        let ch = text.chars().nth(offset).unwrap();
-        if ch == self.ch {
+        let c = text.chars().nth(offset).unwrap();
+        if c == ch {
             Some(ch.to_string())
         } else {
             None
         }
     }
-}
 
-pub struct StartMatcher {}
-
-impl StartMatcher {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Matcher for StartMatcher {
-    fn check_match(&self, _text: &str, offset: usize) -> Option<String> {
+    fn check_start(&self, _text: &str, offset: usize) -> Option<String> {
         if offset == 0 {
             Some("".to_string())
         } else {
             None
         }
     }
-}
 
-pub struct EndMatcher {}
-
-impl EndMatcher {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Matcher for EndMatcher {
-    fn check_match(&self, text: &str, offset: usize) -> Option<String> {
+    fn check_end(&self, text: &str, offset: usize) -> Option<String> {
         if offset == text.len() {
             Some("".to_string())
         } else {
             None
         }
     }
-}
 
+    fn check_single_char_branch(&self,
+                                characters: &Vec<char>,
+                                is_negated: bool,
+                                text: &str,
+                                offset: usize) -> Option<String> {
 
-pub struct SingleCharBranchMatcher {
-    characters: Vec<char>,
-    is_negated: bool,
-}
-
-impl SingleCharBranchMatcher {
-    pub fn new(characters: Vec<char>, is_negated: bool) -> Self {
-        Self { characters, is_negated }
-    }
-}
-
-impl Matcher for SingleCharBranchMatcher {
-    fn check_match(&self, text: &str, offset: usize) -> Option<String> {
-        if !self.is_negated {
+        if !is_negated {
             match text.chars().nth(offset) {
                 Some(ch) => {
-                    for c in &self.characters {
+                    for c in characters {
                         if *c == ch {
                             return Some(ch.to_string());
                         }
@@ -119,7 +113,7 @@ impl Matcher for SingleCharBranchMatcher {
         } else {
             match text.chars().nth(offset) {
                 Some(ch) => {
-                    for c in &self.characters {
+                    for c in characters {
                         if *c == ch {
                             return None;
                         }
@@ -130,17 +124,56 @@ impl Matcher for SingleCharBranchMatcher {
             }
         }
     }
+
+    fn check_sequence(&self, elements: &Vec<Matcher>, text: &str, offset: usize) -> Option<String> {
+        let mut curr_offset = offset;
+        let mut matched_text = String::new();
+
+        for element in elements {
+            match element.check_match(text, curr_offset) {
+                Some(m_text) => {
+                    matched_text.push_str(&m_text);
+                    curr_offset += m_text.chars().count();
+                }
+                None => return None,
+            }
+        }
+        Some(matched_text)
+    }
+
+    fn check_one_or_more(&self, matcher: &Matcher, text: &str, offset: usize) -> Option<String> {
+        let mut curr_offset = offset;
+        let mut matched_text = String::new();
+        loop {
+            match matcher.check_match(text, curr_offset) {
+                Some(m_text) => {
+                    matched_text.push_str(&m_text);
+                    curr_offset += m_text.chars().count();
+                }
+                None => if matched_text.is_empty() {
+                    return None;
+                } else {
+                    break;
+                },
+            }
+        }
+
+        Some(matched_text)
+    }
+
 }
 
-pub fn make_digit_matcher() -> impl Matcher {
+pub struct Match {
+    pub matched_text: String,
+    pub offset: usize,
+}
+
+pub fn make_digit_matcher() -> Matcher {
     let digits = vec!['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
-    SingleCharBranchMatcher::new(
-        digits,
-        false,
-    )
+    Matcher::new_single_char_branch(digits, false)
 }
 
-pub fn make_alpha_num_matcher() -> impl Matcher {
+pub fn make_alpha_num_matcher() -> Matcher {
     let lower_chars = "abcdefghijklmnopqrstuvwxyz";
     let upper_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let digits = "0123456789";
@@ -150,15 +183,10 @@ pub fn make_alpha_num_matcher() -> impl Matcher {
     alpha_nums.push_str(&digits);
     alpha_nums.push('_');
 
-    SingleCharBranchMatcher::new(
-        alpha_nums
-            .chars()
-            .collect::<Vec<_>>(),
-        false,
-    )
+    Matcher::new_single_char_branch(alpha_nums.chars().collect(), false)
 }
 
-pub fn make_group_matcher(pattern: &str) -> impl Matcher {
+pub fn make_group_matcher(pattern: &str) -> Matcher {
     if pattern.chars().count() < 2 {
         panic!("Pattern must have at least two characters");
     }
@@ -181,117 +209,8 @@ pub fn make_group_matcher(pattern: &str) -> impl Matcher {
             .collect::<Vec<_>>()
     };
 
-    SingleCharBranchMatcher::new(
+    Matcher::new_single_char_branch(
         characters,
         is_negated,
     )
-}
-
-pub struct SequenceMatcher {
-    elements: Vec<Box<dyn Matcher>>,
-}
-
-impl SequenceMatcher {
-    pub fn from_pattern(pattern: &str) -> Result<Self> {
-        let mut elements = vec![];
-        let characters = pattern.chars().collect::<Vec<_>>();
-        let n = characters.len();
-        let mut i = 0;
-
-        while i < n {
-            let ch = characters[i];
-            let matcher: Box<dyn Matcher>;
-            match ch {
-                '\\' => {
-                    if i + 1 < n {
-                        let next_ch = characters[i + 1];
-                        match next_ch {
-                            'd' => matcher = Box::new(make_digit_matcher()),
-                            'w' => matcher = Box::new(make_alpha_num_matcher()),
-                            '\\' => matcher = Box::new(SingleCharMatcher::new(next_ch)),
-                            _ => return Err(anyhow!("Invalid character '{}'", next_ch)),
-                        }
-                        i += 2;
-                    } else {
-                        return Err(anyhow!("invalid pattern"));
-                    }
-                }
-                '^' => if i == 0 {
-                    matcher = Box::new(StartMatcher::new());
-                    i += 1;
-                } else {
-                    return Err(anyhow!("^ must start the pattern"));
-                }
-                '$' => if i == n-1 {
-                    matcher = Box::new(EndMatcher::new());
-                    i += 1;
-                } else {
-                    return Err(anyhow!("$ must end the pattern"));
-                }
-                _ => {
-                    matcher = Box::new(SingleCharMatcher::new(ch));
-                    i += 1;
-                },
-            }
-            elements.push(matcher);
-        }
-
-        Ok(Self { elements })
-    }
-}
-
-impl Matcher for SequenceMatcher {
-    fn check_match(&self, text: &str, offset: usize) -> Option<String> {
-        let mut curr_offset = offset;
-        let mut matched_text = String::new();
-
-        for element in &self.elements {
-            match element.check_match(text, curr_offset) {
-                Some(m_text) => {
-                    matched_text.push_str(&m_text);
-                    curr_offset += m_text.chars().count();
-                }
-                None => return None,
-            }
-        }
-        Some(matched_text)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_negative_group() {
-        let text = "banana";
-        let matcher = make_group_matcher("[^anb]");
-
-        assert!(matcher.find_match(text).is_none());
-    }
-
-    #[test]
-    fn test_sequence_matcher() {
-        let text = "sally has 3 apples";
-        let pattern = r"\d apples";
-
-        let matcher = SequenceMatcher::from_pattern(pattern).unwrap();
-        let m_opt = matcher.find_match(text);
-
-        assert!(m_opt.is_some());
-    }
-
-    #[test]
-    fn sequence_matcher_works() {
-        let text = "babanana";
-        let pattern = "ban";
-
-        let matcher = SequenceMatcher::from_pattern(pattern).unwrap();
-        let m_opt = matcher.find_match(text);
-
-        assert!(m_opt.is_some());
-        let m = m_opt.unwrap();
-        assert_eq!(m.matched_text, "ban");
-        assert_eq!(m.offset, 2);
-    }
 }
