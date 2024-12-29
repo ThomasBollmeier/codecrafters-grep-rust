@@ -49,6 +49,16 @@ impl RegexParser {
                     matchers.pop();
                     matcher
                 }
+                '?' => {
+                    self.advance()?;
+                    let last_matcher = matchers
+                        .iter()
+                        .last()
+                        .ok_or(anyhow!("+ expects previous char"))?;
+                    let matcher = Matcher::new_zero_or_one(last_matcher);
+                    matchers.pop();
+                    matcher
+                }
                 _ => {
                     self.advance()?;
                     Matcher::new_single_char(ch)
@@ -192,5 +202,14 @@ mod tests {
         let m = matcher.find_match("room");
         assert!(m.is_some());
         assert_eq!(m.unwrap().matched_text, "oo");
+    }
+
+    #[test]
+    fn test_zero_or_more_matcher() {
+        let matcher = make_matcher("re?m");
+        let m = matcher.find_match("rm");
+        assert!(m.is_some());
+        let m = matcher.find_match("rm");
+        assert!(m.is_some());
     }
 }

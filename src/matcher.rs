@@ -6,6 +6,7 @@ pub enum Matcher {
     SingleCharBranch(Vec<char>, bool),
     Sequence(Vec<Matcher>),
     OneOrMore(Box<Matcher>),
+    ZeroOrOne(Box<Matcher>),
 }
 
 impl Matcher {
@@ -32,6 +33,10 @@ impl Matcher {
 
     pub fn new_one_or_more(matcher: &Matcher) -> Self {
         Matcher::OneOrMore(Box::new(matcher.clone()))
+    }
+
+    pub fn new_zero_or_one(matcher: &Matcher) -> Self {
+        Matcher::ZeroOrOne(Box::new(matcher.clone()))
     }
 
     pub fn matches(&self, text: &str) -> bool {
@@ -61,6 +66,7 @@ impl Matcher {
                 self.check_single_char_branch(characters, *is_negated, text, offset),
             Sequence(matchers) => self.check_sequence(matchers, text, offset),
             OneOrMore(matcher) => self.check_one_or_more(matcher, text, offset),
+            ZeroOrOne(matcher) => self.check_zero_or_one(matcher, text, offset),
         }
     }
 
@@ -161,6 +167,17 @@ impl Matcher {
         Some(matched_text)
     }
 
+    fn check_zero_or_one(&self, matcher: &Matcher, text: &str, offset: usize) -> Option<String> {
+        let mut matched_text = String::new();
+        match matcher.check_match(text, offset) {
+            Some(m_text) => {
+                matched_text.push_str(&m_text);
+            }
+            None => {}
+        }
+
+        Some(matched_text)
+    }
 }
 
 pub struct Match {
