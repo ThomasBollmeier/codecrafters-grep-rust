@@ -23,7 +23,7 @@ impl RegexParser {
                     let matcher = match next_ch {
                         'd' => make_digit_matcher(),
                         'w' => make_alpha_num_matcher(),
-                        '\\' => Matcher::new_single_char(next_ch),
+                        '\\' | '+' | '?' | '.' => Matcher::new_single_char(next_ch),
                         _ => return Err(anyhow!("Invalid character '{}'", next_ch)),
                     };
                     self.advance()?;
@@ -44,8 +44,10 @@ impl RegexParser {
                     let last_matcher = matchers
                         .iter()
                         .last()
+                        .cloned()
                         .ok_or(anyhow!("+ expects previous char"))?;
-                    let matcher = Matcher::new_one_or_more(last_matcher);
+                    let matcher = Matcher::new_one_or_more(
+                        Box::new(last_matcher), None);
                     matchers.pop();
                     matcher
                 }
@@ -59,11 +61,38 @@ impl RegexParser {
                     matchers.pop();
                     matcher
                 }
+                '.' => {
+                    self.advance()?;
+                    Matcher::new_wildcard()
+                }
                 _ => {
                     self.advance()?;
                     Matcher::new_single_char(ch)
                 },
             };
+            let previous_matcher = {
+                matchers.iter().last()
+            };
+
+            let new_prev_matcher = match previous_matcher {
+                Some(prev_matcher) => {
+                    match prev_matcher {
+                        Matcher::OneOrMore {
+                            matcher: m,
+                            follow: _,
+                        } => {
+                            Some(Matcher::new_one_or_more(m.clone(), Some(&matcher)))
+                        },
+                        _ => None
+                    }
+                },
+                None => None
+            };
+            if new_prev_matcher.is_some() {
+                matchers.pop();
+                matchers.push(new_prev_matcher.unwrap());
+            }
+
             matchers.push(matcher);
         }
 
@@ -210,6 +239,13 @@ mod tests {
         let m = matcher.find_match("rm");
         assert!(m.is_some());
         let m = matcher.find_match("rm");
+        assert!(m.is_some());
+    }
+
+    #[test]
+    fn test_wildcard_matcher() {
+        let matcher = make_matcher("g.+gol");
+        let m = matcher.find_match("goøö0Ogol");
         assert!(m.is_some());
     }
 }

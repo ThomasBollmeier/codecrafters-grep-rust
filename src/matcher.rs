@@ -5,8 +5,12 @@ pub enum Matcher {
     EndMatcher,
     SingleCharBranch(Vec<char>, bool),
     Sequence(Vec<Matcher>),
-    OneOrMore(Box<Matcher>),
+    OneOrMore{
+        matcher: Box<Matcher>,
+        follow: Option<Box<Matcher>>,
+    },
     ZeroOrOne(Box<Matcher>),
+    Wildcard,
 }
 
 impl Matcher {
@@ -31,12 +35,22 @@ impl Matcher {
         Matcher::Sequence(matchers)
     }
 
-    pub fn new_one_or_more(matcher: &Matcher) -> Self {
-        Matcher::OneOrMore(Box::new(matcher.clone()))
+    pub fn new_one_or_more(matcher: Box<Matcher>, follow: Option<&Matcher>) -> Self {
+        Matcher::OneOrMore{
+            matcher,
+            follow: match follow {
+                Some(f) => Some(Box::new(f.clone())),
+                None => None,
+            },
+        }
     }
 
     pub fn new_zero_or_one(matcher: &Matcher) -> Self {
         Matcher::ZeroOrOne(Box::new(matcher.clone()))
+    }
+
+    pub fn new_wildcard() -> Self {
+        Matcher::Wildcard
     }
 
     pub fn matches(&self, text: &str) -> bool {
@@ -65,13 +79,19 @@ impl Matcher {
             SingleCharBranch(characters, is_negated) =>
                 self.check_single_char_branch(characters, *is_negated, text, offset),
             Sequence(matchers) => self.check_sequence(matchers, text, offset),
-            OneOrMore(matcher) => self.check_one_or_more(matcher, text, offset),
+            OneOrMore{
+                matcher,
+                follow
+            } => {
+                self.check_one_or_more(matcher, follow, text, offset)
+            },
             ZeroOrOne(matcher) => self.check_zero_or_one(matcher, text, offset),
+            Wildcard => self.check_wildcard(text, offset),
         }
     }
 
     fn check_single_char(&self, ch: char, text: &str, offset: usize) -> Option<String> {
-        if offset >= text.len() {
+        if offset >= text.chars().count() {
             return None;
         }
         let c = text.chars().nth(offset).unwrap();
@@ -147,12 +167,24 @@ impl Matcher {
         Some(matched_text)
     }
 
-    fn check_one_or_more(&self, matcher: &Matcher, text: &str, offset: usize) -> Option<String> {
+    fn check_one_or_more(&self,
+                         matcher: &Matcher,
+                         follow: &Option<Box<Matcher>>,
+                         text: &str,
+                         offset: usize) -> Option<String> {
+
         let mut curr_offset = offset;
         let mut matched_text = String::new();
         loop {
             match matcher.check_match(text, curr_offset) {
                 Some(m_text) => {
+                    // If there is a following matcher that matches
+                    // stop matching to avoid "greedy" matching behavior
+                    if !matched_text.is_empty() &&
+                        follow.is_some() &&
+                        follow.as_ref().unwrap().matches(&m_text) {
+                        return Some(matched_text);
+                    }
                     matched_text.push_str(&m_text);
                     curr_offset += m_text.chars().count();
                 }
@@ -177,6 +209,10 @@ impl Matcher {
         }
 
         Some(matched_text)
+    }
+
+    fn check_wildcard(&self, text: &str, offset: usize) -> Option<String> {
+        text.chars().nth(offset).map(|c| c.to_string())
     }
 }
 
