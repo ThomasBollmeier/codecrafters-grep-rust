@@ -355,4 +355,13 @@ mod tests {
         let m = matcher.find_match("cat and dog");
         assert!(m.is_none());
     }
+
+    #[test]
+    fn test_multiple_backreference_matcher() {
+        let matcher = make_matcher(r"(\d+) (\w+) squares and \1 \2 circles");
+        let m = matcher.find_match("3 red squares and 3 red circles");
+        assert!(m.is_some());
+        let m = matcher.find_match("3 red squares and 3 blue circles");
+        assert!(m.is_none());
+    }
 }
