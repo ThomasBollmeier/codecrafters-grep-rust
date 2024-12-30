@@ -23,7 +23,7 @@ impl RegexParser {
                     let matcher = match next_ch {
                         'd' => make_digit_matcher(),
                         'w' => make_alpha_num_matcher(),
-                        '\\' | '+' | '?' | '.' => Matcher::new_single_char(next_ch),
+                        '\\' | '+' | '?' | '.' | '[' | '(' => Matcher::new_single_char(next_ch),
                         _ => return Err(anyhow!("Invalid character '{}'", next_ch)),
                     };
                     self.advance()?;
@@ -31,6 +31,7 @@ impl RegexParser {
                     matcher
                 },
                 '[' => self.parse_group_matcher()?,
+                '(' => self.parse_alternation()?,
                 '^' => {
                     self.advance()?;
                     Matcher::new_start()
@@ -101,6 +102,66 @@ impl RegexParser {
             1 => Ok(matchers[0].clone()),
             _ => Ok(Matcher::new_sequence(matchers)),
         }
+    }
+
+    fn parse_alternation(&mut self) -> Result<Matcher> {
+        let (segments, consumed_len) = self.split_alternation()?;
+        let mut matchers = vec![];
+        for segment in &segments {
+            let matcher = RegexParser::new(segment).parse()?;
+            matchers.push(matcher);
+        }
+        self.index += consumed_len;
+
+        Ok(Matcher::new_alternation(matchers))
+    }
+
+    fn split_alternation(&self) -> Result<(Vec<String>, usize)> {
+        let mut segments = vec![];
+        let mut segment = String::new();
+        let mut level = 0;
+        let mut consumed_len = 0;
+
+        for (idx, ch) in self.pattern[self.index..].iter().enumerate() {
+            match *ch {
+                '(' => {
+                    level += 1;
+                    if level == 1 {
+                        continue;
+                    }
+                },
+                ')' => {
+                    level -= 1;
+                    if level == 0 {
+                        if segment.is_empty() {
+                            return Err(anyhow!("Empty alternation"));
+                        }
+                        segments.push(segment.clone());
+                        segment.clear();
+                        consumed_len = idx + 1;
+                        break;
+                    }
+                },
+                '|' => {
+                    if level == 1 {
+                        if segment.is_empty() {
+                            return Err(anyhow!("Empty alternation"));
+                        }
+                        segments.push(segment.clone());
+                        segment.clear();
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+            segment.push(*ch);
+        }
+
+        if !segment.is_empty() || level != 0 {
+            return Err(anyhow!("Invalid alternation pattern"));
+        }
+
+        Ok((segments, consumed_len))
     }
 
     fn parse_group_matcher(&mut self) -> Result<Matcher> {
@@ -246,6 +307,19 @@ mod tests {
     fn test_wildcard_matcher() {
         let matcher = make_matcher("g.+gol");
         let m = matcher.find_match("goøö0Ogol");
+        assert!(m.is_some());
+    }
+
+    #[test]
+    fn test_alternation_matcher() {
+        let matcher = make_matcher("(pad|r(a|ö))deln");
+        let m = matcher.find_match("paddeln");
+        assert!(m.is_some());
+        let m = matcher.find_match("radeln");
+        assert!(m.is_some());
+        let m = matcher.find_match("rodeln");
+        assert!(m.is_none());
+        let m = matcher.find_match("rödeln");
         assert!(m.is_some());
     }
 }

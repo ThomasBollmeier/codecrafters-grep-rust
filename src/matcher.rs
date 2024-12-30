@@ -11,6 +11,7 @@ pub enum Matcher {
     },
     ZeroOrOne(Box<Matcher>),
     Wildcard,
+    Alternation(Vec<Matcher>),
 }
 
 impl Matcher {
@@ -53,6 +54,10 @@ impl Matcher {
         Matcher::Wildcard
     }
 
+    pub fn new_alternation(matchers: Vec<Matcher>) -> Self {
+        Matcher::Alternation(matchers)
+    }
+
     pub fn matches(&self, text: &str) -> bool {
         self.find_match(text).is_some()
     }
@@ -87,6 +92,7 @@ impl Matcher {
             },
             ZeroOrOne(matcher) => self.check_zero_or_one(matcher, text, offset),
             Wildcard => self.check_wildcard(text, offset),
+            Alternation(matchers) => self.check_alternation(matchers, text, offset),
         }
     }
 
@@ -213,6 +219,15 @@ impl Matcher {
 
     fn check_wildcard(&self, text: &str, offset: usize) -> Option<String> {
         text.chars().nth(offset).map(|c| c.to_string())
+    }
+
+    fn check_alternation(&self, matchers: &Vec<Matcher>, text: &str, offset: usize) -> Option<String> {
+        for matcher in matchers {
+            if let Some(s) = matcher.check_match(text, offset) {
+                return Some(s);
+            }
+        }
+        None
     }
 }
 
