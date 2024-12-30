@@ -4,11 +4,20 @@ use crate::matcher::{make_alpha_num_matcher, make_digit_matcher, Matcher};
 pub struct RegexParser {
     pattern: Vec<char>,
     index: usize,
+    next_group_idx: usize,
 }
 
 impl RegexParser {
     pub fn new(pattern: &str) -> RegexParser {
-        Self { pattern: pattern.chars().collect(), index: 0 }
+        Self::new_with_next_group_idx(pattern, 1)
+    }
+
+    fn new_with_next_group_idx(pattern: &str, next_group_idx: usize) -> RegexParser {
+        Self {
+            pattern: pattern.chars().collect(),
+            index: 0,
+            next_group_idx,
+        }
     }
 
     pub fn parse(&mut self) -> Result<Matcher> {
@@ -24,14 +33,24 @@ impl RegexParser {
                         'd' => make_digit_matcher(),
                         'w' => make_alpha_num_matcher(),
                         '\\' | '+' | '?' | '.' | '[' | '(' => Matcher::new_single_char(next_ch),
-                        _ => return Err(anyhow!("Invalid character '{}'", next_ch)),
+                        _ => {
+                            if next_ch.is_ascii_digit() {
+                                let group_idx: usize = next_ch.to_digit(10).unwrap() as usize;
+                                if group_idx >= self.next_group_idx {
+                                    return Err(anyhow!("invalid group index"));
+                                }
+                                Matcher::new_group_reference(group_idx)
+                            } else {
+                                return Err(anyhow!("Invalid character '{}'", next_ch))
+                            }
+                        }
                     };
                     self.advance()?;
                     self.advance()?;
                     matcher
                 },
                 '[' => self.parse_group_matcher()?,
-                '(' => self.parse_alternation()?,
+                '(' => self.parse_group()?,
                 '^' => {
                     self.advance()?;
                     Matcher::new_start()
@@ -104,16 +123,21 @@ impl RegexParser {
         }
     }
 
-    fn parse_alternation(&mut self) -> Result<Matcher> {
+    fn parse_group(&mut self) -> Result<Matcher> {
         let (segments, consumed_len) = self.split_alternation()?;
         let mut matchers = vec![];
+        let group_idx = self.next_group_idx;
+        self.next_group_idx += 1;
+
         for segment in &segments {
-            let matcher = RegexParser::new(segment).parse()?;
+            let mut parser = RegexParser::new_with_next_group_idx(segment, self.next_group_idx);
+            let matcher = parser.parse()?;
             matchers.push(matcher);
+            self.next_group_idx = parser.next_group_idx;
         }
         self.index += consumed_len;
 
-        Ok(Matcher::new_alternation(matchers))
+        Ok(Matcher::new_group(matchers, group_idx))
     }
 
     fn split_alternation(&self) -> Result<(Vec<String>, usize)> {
@@ -321,5 +345,14 @@ mod tests {
         assert!(m.is_none());
         let m = matcher.find_match("rödeln");
         assert!(m.is_some());
+    }
+
+    #[test]
+    fn test_single_backreference_matcher() {
+        let matcher = make_matcher(r"(\w+) and \1");
+        let m = matcher.find_match("cat and cat");
+        assert!(m.is_some());
+        let m = matcher.find_match("cat and dog");
+        assert!(m.is_none());
     }
 }

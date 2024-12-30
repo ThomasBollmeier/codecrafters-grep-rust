@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 #[derive(Clone, Debug)]
 pub enum Matcher {
     SingleChar(char),
@@ -11,7 +13,8 @@ pub enum Matcher {
     },
     ZeroOrOne(Box<Matcher>),
     Wildcard,
-    Alternation(Vec<Matcher>),
+    Group(Vec<Matcher>, usize),
+    GroupReference(usize),
 }
 
 impl Matcher {
@@ -54,8 +57,12 @@ impl Matcher {
         Matcher::Wildcard
     }
 
-    pub fn new_alternation(matchers: Vec<Matcher>) -> Self {
-        Matcher::Alternation(matchers)
+    pub fn new_group(matchers: Vec<Matcher>, group_idx: usize) -> Self {
+        Matcher::Group(matchers, group_idx)
+    }
+
+    pub fn new_group_reference(group_idx: usize) -> Self {
+        Matcher::GroupReference(group_idx)
     }
 
     pub fn matches(&self, text: &str) -> bool {
@@ -64,18 +71,19 @@ impl Matcher {
 
     pub fn find_match(&self, text: &str) -> Option<Match> {
         for offset in 0..text.chars().count() {
-            match self.check_match(text, offset) {
-                Some(matched_text) => return Some(Match {
-                    matched_text,
-                    offset,
-                }),
+            match self.check_match(text, offset, &HashMap::new()) {
+                Some(m) => return Some(m),
                 None => continue,
             }
         }
         None
     }
 
-    pub fn check_match(&self, text: &str, offset: usize) -> Option<String> {
+    fn check_match(&self,
+                   text: &str,
+                   offset: usize,
+                   group_results: &HashMap<usize, String>) -> Option<Match> {
+
         use Matcher::*;
         match self {
             SingleChar(ch) => self.check_single_char(*ch, text, offset),
@@ -83,42 +91,42 @@ impl Matcher {
             EndMatcher => self.check_end(text, offset),
             SingleCharBranch(characters, is_negated) =>
                 self.check_single_char_branch(characters, *is_negated, text, offset),
-            Sequence(matchers) => self.check_sequence(matchers, text, offset),
-            OneOrMore{
-                matcher,
-                follow
-            } => {
-                self.check_one_or_more(matcher, follow, text, offset)
-            },
-            ZeroOrOne(matcher) => self.check_zero_or_one(matcher, text, offset),
+            Sequence(matchers) =>
+                self.check_sequence(matchers, text, offset, group_results),
+            OneOrMore{ matcher, follow } =>
+                self.check_one_or_more(matcher, follow, text, offset, group_results),
+            ZeroOrOne(matcher) => self.check_zero_or_one(matcher, text, offset, group_results),
             Wildcard => self.check_wildcard(text, offset),
-            Alternation(matchers) => self.check_alternation(matchers, text, offset),
+            Group(matchers, group_idx) =>
+                self.check_group(matchers, *group_idx, text, offset, group_results),
+            GroupReference(group_idx) =>
+                self.check_group_reference(*group_idx, text, offset, group_results),
         }
     }
 
-    fn check_single_char(&self, ch: char, text: &str, offset: usize) -> Option<String> {
+    fn check_single_char(&self, ch: char, text: &str, offset: usize) -> Option<Match> {
         if offset >= text.chars().count() {
             return None;
         }
         let c = text.chars().nth(offset).unwrap();
         if c == ch {
-            Some(ch.to_string())
+            Some(Match::new(&ch.to_string(), offset))
         } else {
             None
         }
     }
 
-    fn check_start(&self, _text: &str, offset: usize) -> Option<String> {
+    fn check_start(&self, _text: &str, offset: usize) -> Option<Match> {
         if offset == 0 {
-            Some("".to_string())
+            Some(Match::new("", offset))
         } else {
             None
         }
     }
 
-    fn check_end(&self, text: &str, offset: usize) -> Option<String> {
+    fn check_end(&self, text: &str, offset: usize) -> Option<Match> {
         if offset == text.len() {
-            Some("".to_string())
+            Some(Match::new("", offset))
         } else {
             None
         }
@@ -128,14 +136,14 @@ impl Matcher {
                                 characters: &Vec<char>,
                                 is_negated: bool,
                                 text: &str,
-                                offset: usize) -> Option<String> {
+                                offset: usize) -> Option<Match> {
 
         if !is_negated {
             match text.chars().nth(offset) {
                 Some(ch) => {
                     for c in characters {
                         if *c == ch {
-                            return Some(ch.to_string());
+                            return Some(Match::new(&ch.to_string(), offset));
                         }
                     }
                     None
@@ -150,51 +158,68 @@ impl Matcher {
                             return None;
                         }
                     }
-                    Some(ch.to_string())
+                    Some(Match::new(&ch.to_string(), offset))
                 }
                 None => None,
             }
         }
     }
 
-    fn check_sequence(&self, elements: &Vec<Matcher>, text: &str, offset: usize) -> Option<String> {
+    fn check_sequence(&self,
+                      elements: &Vec<Matcher>,
+                      text: &str,
+                      offset: usize,
+                      group_results:&HashMap<usize, String>) -> Option<Match> {
         let mut curr_offset = offset;
-        let mut matched_text = String::new();
+        let mut curr_groups = group_results.clone();
+        let mut m = Match::new("", offset);
 
         for element in elements {
-            match element.check_match(text, curr_offset) {
-                Some(m_text) => {
-                    matched_text.push_str(&m_text);
-                    curr_offset += m_text.chars().count();
+            match element.check_match(text, curr_offset, &curr_groups) {
+                Some(other) => {
+                    m.accumulate(&other);
+                    curr_offset += other.matched_text.chars().count();
+                    Self::update_group_results(&mut curr_groups, &other);
                 }
                 None => return None,
             }
         }
-        Some(matched_text)
+        Some(m)
+    }
+
+    fn update_group_results(group_results: &mut HashMap<usize, String>, m: &Match) {
+        for (gid, sub_match) in &m.sub_matches {
+            group_results.insert(*gid, sub_match.matched_text.clone());
+        }
     }
 
     fn check_one_or_more(&self,
                          matcher: &Matcher,
                          follow: &Option<Box<Matcher>>,
                          text: &str,
-                         offset: usize) -> Option<String> {
+                         offset: usize,
+                         group_results: &HashMap<usize, String>) -> Option<Match> {
 
         let mut curr_offset = offset;
-        let mut matched_text = String::new();
+        let mut m = Match::new("", offset);
+        let mut curr_groups = group_results.clone();
+
         loop {
-            match matcher.check_match(text, curr_offset) {
-                Some(m_text) => {
+            match matcher.check_match(text, curr_offset, &curr_groups) {
+                Some(other) => {
                     // If there is a following matcher that matches
                     // stop matching to avoid "greedy" matching behavior
-                    if !matched_text.is_empty() &&
+                    if !m.matched_text.is_empty() &&
                         follow.is_some() &&
-                        follow.as_ref().unwrap().matches(&m_text) {
-                        return Some(matched_text);
+                        follow.as_ref().unwrap().matches(&other.matched_text) {
+                        return Some(m);
                     }
-                    matched_text.push_str(&m_text);
-                    curr_offset += m_text.chars().count();
+
+                    m.accumulate(&other);
+                    curr_offset += other.matched_text.chars().count();
+                    Self::update_group_results(&mut curr_groups, &other);
                 }
-                None => if matched_text.is_empty() {
+                None => if m.matched_text.is_empty() {
                     return None;
                 } else {
                     break;
@@ -202,38 +227,92 @@ impl Matcher {
             }
         }
 
-        Some(matched_text)
+        Some(m)
     }
 
-    fn check_zero_or_one(&self, matcher: &Matcher, text: &str, offset: usize) -> Option<String> {
-        let mut matched_text = String::new();
-        match matcher.check_match(text, offset) {
-            Some(m_text) => {
-                matched_text.push_str(&m_text);
+    fn check_zero_or_one(&self,
+                         matcher: &Matcher,
+                         text: &str,
+                         offset: usize,
+                         group_results: &HashMap<usize, String>) -> Option<Match> {
+
+        let mut m = Match::new("", offset);
+        match matcher.check_match(text, offset, group_results) {
+            Some(other) => {
+                m.accumulate(&other);
             }
             None => {}
         }
 
-        Some(matched_text)
+        Some(m)
     }
 
-    fn check_wildcard(&self, text: &str, offset: usize) -> Option<String> {
-        text.chars().nth(offset).map(|c| c.to_string())
+    fn check_wildcard(&self, text: &str, offset: usize) -> Option<Match> {
+        text.chars().nth(offset).map(|c| Match::new(&c.to_string(), offset))
     }
 
-    fn check_alternation(&self, matchers: &Vec<Matcher>, text: &str, offset: usize) -> Option<String> {
+    fn check_group(&self,
+                   matchers: &Vec<Matcher>,
+                   group_idx: usize,
+                   text: &str,
+                   offset: usize,
+                   group_results: &HashMap<usize, String>) -> Option<Match> {
+
+        let mut group_match = Match::new("", offset);
+
         for matcher in matchers {
-            if let Some(s) = matcher.check_match(text, offset) {
-                return Some(s);
+            if let Some(m) = matcher.check_match(text, offset, group_results) {
+                group_match.accumulate(&m);
+                group_match.sub_matches.insert(group_idx, group_match.clone());
+                return Some(group_match);
             }
         }
         None
     }
+
+    fn check_group_reference(&self,
+                             group_idx: usize,
+                             text: &str,
+                             offset: usize,
+                             group_results: &HashMap<usize, String>) -> Option<Match> {
+
+        match group_results.get(&group_idx) {
+            Some(matched) => {
+                let text = text.chars().skip(offset).collect::<String>();
+                if text.starts_with(matched) {
+                    Some(Match::new(&matched, offset))
+                } else {
+                    None
+                }
+            }
+            None => None
+        }
+    }
 }
 
+#[derive(Debug, Clone)]
 pub struct Match {
     pub matched_text: String,
     pub offset: usize,
+    pub sub_matches: HashMap<usize, Match>,
+}
+
+impl Match {
+    fn new(matched_text: &str, offset: usize) -> Self {
+        Self {
+            matched_text: matched_text.to_string(),
+            offset,
+            sub_matches: HashMap::new(),
+        }
+    }
+
+    fn accumulate(&mut self, other: &Match) {
+        self.matched_text.push_str(&other.matched_text);
+        for (group_idx, sub_match) in &other.sub_matches {
+            self.sub_matches.insert(*group_idx, sub_match.clone());
+        }
+    }
+
 }
 
 pub fn make_digit_matcher() -> Matcher {
