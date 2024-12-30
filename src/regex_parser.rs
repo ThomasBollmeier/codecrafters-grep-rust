@@ -1,6 +1,7 @@
 use anyhow::*;
 use crate::matcher::{make_alpha_num_matcher, make_digit_matcher, Matcher};
 
+#[derive(Debug)]
 pub struct RegexParser {
     pattern: Vec<char>,
     index: usize,
@@ -100,9 +101,9 @@ impl RegexParser {
                         Matcher::OneOrMore {
                             matcher: m,
                             follow: _,
-                        } => {
-                            Some(Matcher::new_one_or_more(m.clone(), Some(&matcher)))
-                        },
+                        } => Some(Matcher::new_one_or_more(m.clone(), Some(&matcher))),
+                        Matcher::Group(matchers, group_id) =>
+                            Self::new_group_with_follow_info(matchers, *group_id, &matcher),
                         _ => None
                     }
                 },
@@ -120,6 +121,42 @@ impl RegexParser {
             0 => Err(anyhow!("No matcher found")),
             1 => Ok(matchers[0].clone()),
             _ => Ok(Matcher::new_sequence(matchers)),
+        }
+    }
+
+    fn new_group_with_follow_info(matchers: &Vec<Matcher>,
+                                  group_idx: usize,
+                                  follow: &Matcher) -> Option<Matcher> {
+        let mut new_matchers = vec![];
+        let mut changed = false;
+
+        for matcher in matchers {
+            let new_matcher = match matcher {
+                Matcher::OneOrMore {
+                    matcher: m,
+                    follow: _,
+                } => {
+                    changed = true;
+                    Matcher::new_one_or_more(m.clone(), Some(follow))
+                }
+                Matcher::Group(matchers, group_id) => {
+                    match Self::new_group_with_follow_info(matchers, *group_id, &matcher) {
+                        Some(new_group) => {
+                            changed = true;
+                            new_group
+                        }
+                        None => matcher.clone(),
+                    }
+                }
+                _ => matcher.clone(),
+            };
+            new_matchers.push(new_matcher);
+        }
+
+        if changed {
+            Some(Matcher::new_group(new_matchers, group_idx))
+        } else {
+            None
         }
     }
 
@@ -363,5 +400,12 @@ mod tests {
         assert!(m.is_some());
         let m = matcher.find_match("3 red squares and 3 blue circles");
         assert!(m.is_none());
+    }
+
+    #[test]
+    fn test_nested_backreference_matcher() {
+        let matcher = make_matcher(r"(([abc]+)-([def]+)) is \1, not ([^xyz]+), \2, or \3");
+        let m = matcher.find_match("abc-def is abc-def, not efg, abc, or def");
+        assert!(m.is_some());
     }
 }

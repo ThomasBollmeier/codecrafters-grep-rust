@@ -181,7 +181,7 @@ impl Matcher {
                     curr_offset += other.matched_text.chars().count();
                     Self::update_group_results(&mut curr_groups, &other);
                 }
-                None => return None,
+                None => return None
             }
         }
         Some(m)
