@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Matcher {
     SingleChar(char),
     StartMatcher,
@@ -36,7 +36,42 @@ impl Matcher {
     }
 
     pub fn new_sequence(matchers: Vec<Matcher>) -> Self {
-        Matcher::Sequence(matchers)
+        let mut prev_one_or_more_opt: Option<Matcher> = None;
+        let mut new_matchers = vec![];
+
+        for matcher in matchers {
+            if let Matcher::OneOrMore{ matcher: _, follow: _ } = matcher {
+                prev_one_or_more_opt = Some(matcher);
+                continue;
+            }
+            match &prev_one_or_more_opt {
+                Some(Matcher::OneOrMore {matcher: m, follow:_}) => {
+                   if matcher != **m {
+                        // If it's different, we need to add the previous one-or-more matcher
+                        // before adding the current matcher.
+                        new_matchers.push(Matcher::OneOrMore{
+                            matcher: m.clone(),
+                            follow: Some(Box::new(matcher.clone())),
+                        });
+                        prev_one_or_more_opt = None; // Reset after adding
+                    }
+                    new_matchers.push(matcher);
+                }
+                _ => {
+                    new_matchers.push(matcher);
+                }
+            }
+        }
+
+        // If we had a trailing one-or-more matcher, we need to add it at the end
+        if let Some(prev) = prev_one_or_more_opt {
+            new_matchers.push(Matcher::OneOrMore{
+                matcher: Box::new(prev),
+                follow: None,
+            });
+        }
+
+        Matcher::Sequence(new_matchers)
     }
 
     pub fn new_one_or_more(matcher: Box<Matcher>, follow: Option<&Matcher>) -> Self {

@@ -356,6 +356,22 @@ mod tests {
     }
 
     #[test]
+    fn test_one_or_more_matcher_not_greedy() {
+        let matcher = make_matcher("ca+at");
+        let m = matcher.find_match("caaats");
+        assert!(m.is_some());
+        assert_eq!(m.unwrap().matched_text, "caaat");
+    }
+
+    #[test]
+    fn test_one_or_more_matcher_at_start() {
+        let matcher = make_matcher(".+berry");
+        let m = matcher.find_match("strawberry");
+        assert!(m.is_some());
+        assert_eq!(m.unwrap().matched_text, "strawberry");
+    }
+
+    #[test]
     fn test_zero_or_more_matcher() {
         let matcher = make_matcher("re?m");
         let m = matcher.find_match("rm");
