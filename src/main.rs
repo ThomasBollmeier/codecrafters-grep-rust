@@ -32,6 +32,27 @@ fn process_file(filename: &str, pattern: &str) {
     }
 }
 
+fn process_files(filenames: &[String], pattern: &str) {
+    let mut found = false;
+
+    for filename in filenames {
+        let file_content = std::fs::read_to_string(filename).unwrap();
+
+        for line in file_content.lines() {
+            if match_pattern(line, pattern) {
+                found = true;
+                println!("{filename}:{line}");
+            }
+        }
+    }
+
+    if found {
+        process::exit(0);
+    } else {
+        process::exit(1);
+    }
+}
+
 fn match_pattern(input_line: &str, pattern: &str) -> bool {
     match RegexParser::new(pattern).parse() {
         Ok(matcher) => matcher.matches(&input_line),
@@ -45,8 +66,8 @@ fn main() {
     //eprintln!("Logs from your program will appear here!");
 
     let num_args = env::args().len();
-    if num_args != 3 && num_args != 4 {
-        println!("Expected 2 or 3 arguments, got {}", num_args - 1);
+    if num_args < 3 {
+        println!("Expected 2 or more arguments, got {}", num_args - 1);
         process::exit(1);
     }
 
@@ -57,9 +78,12 @@ fn main() {
 
     let pattern = env::args().nth(2).unwrap();
 
-    if num_args == 3 {
-        process_stdin(&pattern);
-    } else {
-        process_file(&env::args().nth(3).unwrap(), &pattern);
+    match num_args {
+        3 => process_stdin(&pattern),
+        4 => process_file(&env::args().nth(3).unwrap(), &pattern),
+        _ => {
+            let filenames: Vec<String> = env::args().skip(3).collect();
+            process_files(&filenames, &pattern)
+        }
     }
 }
