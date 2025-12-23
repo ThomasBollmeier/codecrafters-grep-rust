@@ -72,6 +72,18 @@ impl RegexParser {
                     matchers.pop();
                     matcher
                 }
+                '*' => {
+                    self.advance()?;
+                    let last_matcher = matchers
+                        .iter()
+                        .last()
+                        .cloned()
+                        .ok_or(anyhow!("+ expects previous char"))?;
+                    let matcher = Matcher::new_zero_or_more(
+                        Box::new(last_matcher), None);
+                    matchers.pop();
+                    matcher
+                }                
                 '?' => {
                     self.advance()?;
                     let last_matcher = matchers
@@ -372,12 +384,20 @@ mod tests {
     }
 
     #[test]
-    fn test_zero_or_more_matcher() {
+    fn test_zero_or_one_matcher() {
         let matcher = make_matcher("re?m");
         let m = matcher.find_match("rm");
         assert!(m.is_some());
         let m = matcher.find_match("rm");
         assert!(m.is_some());
+    }
+
+    #[test]
+    fn test_zero_or_more_matcher() {
+        let matcher = make_matcher("go*gle");
+        let m = matcher.find_match("ggler");
+        assert!(m.is_some());
+        assert_eq!(m.unwrap().matched_text, "ggle");
     }
 
     #[test]

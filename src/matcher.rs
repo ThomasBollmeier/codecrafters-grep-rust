@@ -11,6 +11,10 @@ pub enum Matcher {
         matcher: Box<Matcher>,
         follow: Option<Box<Matcher>>,
     },
+    ZeroOrMore{
+        matcher: Box<Matcher>,
+        follow: Option<Box<Matcher>>,
+    },
     ZeroOrOne(Box<Matcher>),
     Wildcard,
     Group(Vec<Matcher>, usize),
@@ -36,39 +40,31 @@ impl Matcher {
     }
 
     pub fn new_sequence(matchers: Vec<Matcher>) -> Self {
-        let mut prev_one_or_more_opt: Option<Matcher> = None;
         let mut new_matchers = vec![];
+        let mut pending: Option<Matcher> = None;
 
         for matcher in matchers {
-            if let Matcher::OneOrMore{ matcher: _, follow: _ } = matcher {
-                prev_one_or_more_opt = Some(matcher);
-                continue;
-            }
-            match &prev_one_or_more_opt {
-                Some(Matcher::OneOrMore {matcher: m, follow:_}) => {
-                   if matcher != **m {
-                        // If it's different, we need to add the previous one-or-more matcher
-                        // before adding the current matcher.
-                        new_matchers.push(Matcher::OneOrMore{
-                            matcher: m.clone(),
-                            follow: Some(Box::new(matcher.clone())),
-                        });
-                        prev_one_or_more_opt = None; // Reset after adding
+            if let Some(p) = &pending {
+                if p.is_mergeable_with(&matcher) {
+                    // Merge the two matchers
+                    let merged = p.merge_with(&matcher);
+                    pending = Some(merged);
+                } else {
+                    // Push the pending matcher to new_matchers
+                    if !p.can_have_follow() {
+                        new_matchers.push(p.clone());
+                    } else {
+                        new_matchers.push(p.set_follow(&matcher));
                     }
-                    new_matchers.push(matcher);
+                    pending = Some(matcher);
                 }
-                _ => {
-                    new_matchers.push(matcher);
-                }
+            } else {
+                pending = Some(matcher);
             }
         }
 
-        // If we had a trailing one-or-more matcher, we need to add it at the end
-        if let Some(prev) = prev_one_or_more_opt {
-            new_matchers.push(Matcher::OneOrMore{
-                matcher: Box::new(prev),
-                follow: None,
-            });
+        if let Some(p) = pending {
+            new_matchers.push(p);
         }
 
         Matcher::Sequence(new_matchers)
@@ -76,6 +72,16 @@ impl Matcher {
 
     pub fn new_one_or_more(matcher: Box<Matcher>, follow: Option<&Matcher>) -> Self {
         Matcher::OneOrMore{
+            matcher,
+            follow: match follow {
+                Some(f) => Some(Box::new(f.clone())),
+                None => None,
+            },
+        }
+    }
+
+    pub fn new_zero_or_more(matcher: Box<Matcher>, follow: Option<&Matcher>) -> Self {
+        Matcher::ZeroOrMore{
             matcher,
             follow: match follow {
                 Some(f) => Some(Box::new(f.clone())),
@@ -114,6 +120,69 @@ impl Matcher {
         None
     }
 
+    fn is_mergeable_with(&self, other: &Matcher) -> bool {
+        match (self, other) {
+            (Matcher::OneOrMore { matcher: m1, ..}, Matcher::OneOrMore{matcher: m2, ..}) => {
+                **m1 == **m2
+            }
+            (Matcher::OneOrMore { matcher: m1, ..}, Matcher::ZeroOrMore{matcher: m2, ..}) => {
+                **m1 == **m2
+            }
+            (Matcher::OneOrMore { matcher: m1, ..}, _) => {
+                **m1 == *other
+            }
+            (Matcher::ZeroOrMore { matcher: m1, ..}, Matcher::OneOrMore{matcher: m2, ..}) => {
+                **m1 == **m2
+            }
+            (Matcher::ZeroOrMore { matcher: m1, ..}, Matcher::ZeroOrMore{matcher: m2, ..}) => {
+                **m1 == **m2
+            }
+            (Matcher::ZeroOrMore { matcher: m1, ..}, _) => {
+                **m1 == *other
+            }
+            _ => false,
+        }
+    }
+
+    fn merge_with(&self, other: &Matcher) -> Matcher {
+        if !self.is_mergeable_with(other) {
+            panic!("Cannot merge non-mergeable matchers");
+        }
+
+        match (self, other) {
+            (Matcher::OneOrMore{..}, _) => self.clone(),
+            (Matcher::ZeroOrMore{..}, Matcher::OneOrMore {..}) => other.clone(),
+            (Matcher::ZeroOrMore{..}, Matcher::ZeroOrMore {..}) => self.clone(),
+            (Matcher::ZeroOrMore { matcher: m, ..}, _) => Matcher::OneOrMore {
+                matcher: m.clone(),
+                follow: None,
+            },
+            _ => panic!("Cannot merge non-mergeable matchers"),
+        }
+    }
+
+    fn can_have_follow(&self) -> bool {
+        match self {
+            Matcher::OneOrMore {..} => true,
+            Matcher::ZeroOrMore {..} => true,
+            _ => false,
+        }
+    }
+
+    fn set_follow(&self, follow: &Matcher) -> Matcher  {
+        match self {
+            Matcher::OneOrMore { matcher, .. } => Matcher::OneOrMore {
+                matcher: matcher.clone(),
+                follow: Some(Box::new(follow.clone())),
+            },
+            Matcher::ZeroOrMore { matcher, .. } => Matcher::ZeroOrMore {
+                matcher: matcher.clone(),
+                follow: Some(Box::new(follow.clone())),
+            },
+            _ => panic!("set_follow can only be called on OneOrMore or ZeroOrMore matchers"),
+        }
+    }
+
     fn check_match(&self,
                    text: &str,
                    offset: usize,
@@ -130,6 +199,8 @@ impl Matcher {
                 self.check_sequence(matchers, text, offset, group_results),
             OneOrMore{ matcher, follow } =>
                 self.check_one_or_more(matcher, follow, text, offset, group_results),
+            ZeroOrMore { matcher, follow } =>
+                self.check_zero_or_more(matcher, follow, text, offset, group_results),
             ZeroOrOne(matcher) => self.check_zero_or_one(matcher, text, offset, group_results),
             Wildcard => self.check_wildcard(text, offset),
             Group(matchers, group_idx) =>
@@ -263,6 +334,37 @@ impl Matcher {
         }
 
         Some(m)
+    }
+
+    fn check_zero_or_more(&self,
+                         matcher: &Matcher,
+                         follow: &Option<Box<Matcher>>,
+                         text: &str,
+                         offset: usize,
+                         group_results: &HashMap<usize, String>) -> Option<Match> {
+
+        let mut curr_offset = offset;
+        let mut m = Match::new("", offset);
+        let mut curr_groups = group_results.clone();
+
+        loop {
+            match matcher.check_match(text, curr_offset, &curr_groups) {
+                Some(other) => {
+                    // If there is a following matcher that matches
+                    // stop matching to avoid "greedy" matching behavior
+                    if follow.is_some() && follow.as_ref().unwrap().matches(&other.matched_text) {
+                        return Some(m);
+                    }
+
+                    m.accumulate(&other);
+                    curr_offset += other.matched_text.chars().count();
+                    Self::update_group_results(&mut curr_groups, &other);
+                }
+                None => {
+                    return Some(m);
+                },
+            }
+        }
     }
 
     fn check_zero_or_one(&self,
