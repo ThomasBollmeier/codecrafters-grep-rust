@@ -137,12 +137,38 @@ impl RegexParser {
             let ch = self.advance()?;
             if ch.is_ascii_digit() {
                 min_str.push(ch);
+            } else if ch == ',' {
+                break;
             } else if ch == '}' {
                 let min = min_str.parse::<usize>()?;
                 return Ok((min, Some(min)));
             } else {
                 return Err(anyhow!("invalid quantifier character '{}'", ch));
             }
+        }
+
+        let mut max_str = String::new();
+        loop {
+            let ch = self.advance()?;
+            if ch.is_ascii_digit() {
+                max_str.push(ch);
+            } else if ch == '}' {
+                break;
+            } else {
+                return Err(anyhow!("invalid quantifier character '{}'", ch));
+            }
+        }
+
+        if max_str.is_empty() {
+            let min = min_str.parse::<usize>()?;
+            Ok((min, None))
+        } else {
+            let min = min_str.parse::<usize>()?;
+            let max = max_str.parse::<usize>()?;
+            if max < min {
+                return Err(anyhow!("max quantifier must be >= min quantifier"));
+            }
+            Ok((min, Some(max)))
         }
     }
 
@@ -383,6 +409,17 @@ mod tests {
         assert!(m.is_some());
         let m = matcher.find_match("vroooom");
         assert!(m.is_none());
+    }
+
+    #[test]
+    fn test_quantifier2() {
+        let matcher = make_matcher("ro{2,}m");
+        let m = matcher.find_match("rome");
+        assert!(m.is_none());
+        let m = matcher.find_match("room");
+        assert!(m.is_some());
+        let m = matcher.find_match("vroooom");
+        assert!(m.is_some());
     }
 
     #[test]
