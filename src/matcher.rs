@@ -7,15 +7,12 @@ pub enum Matcher {
     EndMatcher,
     SingleCharBranch(Vec<char>, bool),
     Sequence(Vec<Matcher>),
-    OneOrMore{
+    Multiple{
         matcher: Box<Matcher>,
+        min: usize,
+        max: Option<usize>,
         follow: Option<Box<Matcher>>,
     },
-    ZeroOrMore{
-        matcher: Box<Matcher>,
-        follow: Option<Box<Matcher>>,
-    },
-    ZeroOrOne(Box<Matcher>),
     Wildcard,
     Group(Vec<Matcher>, usize),
     GroupReference(usize),
@@ -71,8 +68,10 @@ impl Matcher {
     }
 
     pub fn new_one_or_more(matcher: Box<Matcher>, follow: Option<&Matcher>) -> Self {
-        Matcher::OneOrMore{
+        Matcher::Multiple{
             matcher,
+            min: 1,
+            max: None,
             follow: match follow {
                 Some(f) => Some(Box::new(f.clone())),
                 None => None,
@@ -81,8 +80,10 @@ impl Matcher {
     }
 
     pub fn new_zero_or_more(matcher: Box<Matcher>, follow: Option<&Matcher>) -> Self {
-        Matcher::ZeroOrMore{
+        Matcher::Multiple{
             matcher,
+            min: 0,
+            max: None,
             follow: match follow {
                 Some(f) => Some(Box::new(f.clone())),
                 None => None,
@@ -91,7 +92,12 @@ impl Matcher {
     }
 
     pub fn new_zero_or_one(matcher: &Matcher) -> Self {
-        Matcher::ZeroOrOne(Box::new(matcher.clone()))
+        Matcher::Multiple{
+            matcher: Box::new(matcher.clone()),
+            min: 0,
+            max: Some(1),
+            follow: None,
+        }
     }
 
     pub fn new_wildcard() -> Self {
@@ -121,23 +127,12 @@ impl Matcher {
     }
 
     fn is_mergeable_with(&self, other: &Matcher) -> bool {
+        use Matcher::*;
         match (self, other) {
-            (Matcher::OneOrMore { matcher: m1, ..}, Matcher::OneOrMore{matcher: m2, ..}) => {
+            (Multiple { matcher: m1, ..}, Multiple{matcher: m2, ..}) => {
                 **m1 == **m2
             }
-            (Matcher::OneOrMore { matcher: m1, ..}, Matcher::ZeroOrMore{matcher: m2, ..}) => {
-                **m1 == **m2
-            }
-            (Matcher::OneOrMore { matcher: m1, ..}, _) => {
-                **m1 == *other
-            }
-            (Matcher::ZeroOrMore { matcher: m1, ..}, Matcher::OneOrMore{matcher: m2, ..}) => {
-                **m1 == **m2
-            }
-            (Matcher::ZeroOrMore { matcher: m1, ..}, Matcher::ZeroOrMore{matcher: m2, ..}) => {
-                **m1 == **m2
-            }
-            (Matcher::ZeroOrMore { matcher: m1, ..}, _) => {
+            (Multiple { matcher: m1, ..}, _) => {
                 **m1 == *other
             }
             _ => false,
@@ -145,40 +140,71 @@ impl Matcher {
     }
 
     fn merge_with(&self, other: &Matcher) -> Matcher {
+        use Matcher::*;
+
         if !self.is_mergeable_with(other) {
             panic!("Cannot merge non-mergeable matchers");
         }
 
         match (self, other) {
-            (Matcher::OneOrMore{..}, _) => self.clone(),
-            (Matcher::ZeroOrMore{..}, Matcher::OneOrMore {..}) => other.clone(),
-            (Matcher::ZeroOrMore{..}, Matcher::ZeroOrMore {..}) => self.clone(),
-            (Matcher::ZeroOrMore { matcher: m, ..}, _) => Matcher::OneOrMore {
-                matcher: m.clone(),
-                follow: None,
-            },
+            (Multiple { matcher: m, min: min1, max: max1, .. },
+             Multiple { min: min2, max: max2, .. }) => {
+                let new_min = min1 + min2;
+                let new_max = match (max1, max2) {
+                    (Some(v1), Some(v2)) => Some(v1 + v2),
+                    _ => None,
+                };
+                Multiple {
+                    matcher: m.clone(),
+                    min: new_min,
+                    max: new_max,
+                    follow: None,
+                }
+            }
+            (Multiple { matcher: m, min, max, .. }, _) => {
+                let new_min = min + 1;
+                let new_max = match max {
+                    Some(v) => Some(v + 1),
+                    None => None,
+                };
+                Multiple {
+                    matcher: m.clone(),
+                    min: new_min,
+                    max: new_max,
+                    follow: None,
+                }
+            }
             _ => panic!("Cannot merge non-mergeable matchers"),
         }
     }
 
     fn can_have_follow(&self) -> bool {
         match self {
-            Matcher::OneOrMore {..} => true,
-            Matcher::ZeroOrMore {..} => true,
+            Matcher::Multiple {..} => true,
+            Matcher::Group(matchers,_) => {
+                let last_match = matchers.last().unwrap();
+                last_match.can_have_follow()
+            },
             _ => false,
         }
     }
 
     fn set_follow(&self, follow: &Matcher) -> Matcher  {
         match self {
-            Matcher::OneOrMore { matcher, .. } => Matcher::OneOrMore {
+            Matcher::Multiple { matcher, min, max,.. } => Matcher::Multiple {
                 matcher: matcher.clone(),
+                min: *min,
+                max: *max,
                 follow: Some(Box::new(follow.clone())),
             },
-            Matcher::ZeroOrMore { matcher, .. } => Matcher::ZeroOrMore {
-                matcher: matcher.clone(),
-                follow: Some(Box::new(follow.clone())),
-            },
+            Matcher::Group(matchers, group_idx) => {
+                let last_matcher = matchers.last().unwrap();
+                let new_last_matcher = last_matcher.set_follow(follow);
+                let mut new_matchers = matchers.clone();
+                new_matchers.pop();
+                new_matchers.push(new_last_matcher);
+                Matcher::Group(new_matchers, *group_idx)
+            }
             _ => panic!("set_follow can only be called on OneOrMore or ZeroOrMore matchers"),
         }
     }
@@ -197,11 +223,8 @@ impl Matcher {
                 self.check_single_char_branch(characters, *is_negated, text, offset),
             Sequence(matchers) =>
                 self.check_sequence(matchers, text, offset, group_results),
-            OneOrMore{ matcher, follow } =>
-                self.check_one_or_more(matcher, follow, text, offset, group_results),
-            ZeroOrMore { matcher, follow } =>
-                self.check_zero_or_more(matcher, follow, text, offset, group_results),
-            ZeroOrOne(matcher) => self.check_zero_or_one(matcher, text, offset, group_results),
+            Multiple { matcher, min, max, follow } =>
+                self.check_multiple(matcher, *min, *max, follow, text, offset, group_results),
             Wildcard => self.check_wildcard(text, offset),
             Group(matchers, group_idx) =>
                 self.check_group(matchers, *group_idx, text, offset, group_results),
@@ -299,24 +322,31 @@ impl Matcher {
         }
     }
 
-    fn check_one_or_more(&self,
-                         matcher: &Matcher,
-                         follow: &Option<Box<Matcher>>,
-                         text: &str,
-                         offset: usize,
-                         group_results: &HashMap<usize, String>) -> Option<Match> {
-
+    fn check_multiple(&self,
+                      matcher: &Matcher,
+                      min: usize,
+                      max: Option<usize>,
+                      follow: &Option<Box<Matcher>>,
+                      text: &str,
+                      offset: usize,
+                      group_results: &HashMap<usize, String>) -> Option<Match> {
         let mut curr_offset = offset;
         let mut m = Match::new("", offset);
         let mut curr_groups = group_results.clone();
+        let mut count = 0;
 
         loop {
+            let min_reached = count >= min;
+            let max_reached = match max {
+                Some(max_val) => count >= max_val,
+                None => true,
+            };
+
             match matcher.check_match(text, curr_offset, &curr_groups) {
                 Some(other) => {
                     // If there is a following matcher that matches
                     // stop matching to avoid "greedy" matching behavior
-                    if !m.matched_text.is_empty() &&
-                        follow.is_some() &&
+                    if min_reached && max_reached && follow.is_some() &&
                         follow.as_ref().unwrap().matches(&other.matched_text) {
                         return Some(m);
                     }
@@ -324,64 +354,24 @@ impl Matcher {
                     m.accumulate(&other);
                     curr_offset += other.matched_text.chars().count();
                     Self::update_group_results(&mut curr_groups, &other);
-                }
-                None => if m.matched_text.is_empty() {
-                    return None;
-                } else {
-                    break;
-                },
-            }
-        }
+                    count += 1;
 
-        Some(m)
-    }
-
-    fn check_zero_or_more(&self,
-                         matcher: &Matcher,
-                         follow: &Option<Box<Matcher>>,
-                         text: &str,
-                         offset: usize,
-                         group_results: &HashMap<usize, String>) -> Option<Match> {
-
-        let mut curr_offset = offset;
-        let mut m = Match::new("", offset);
-        let mut curr_groups = group_results.clone();
-
-        loop {
-            match matcher.check_match(text, curr_offset, &curr_groups) {
-                Some(other) => {
-                    // If there is a following matcher that matches
-                    // stop matching to avoid "greedy" matching behavior
-                    if follow.is_some() && follow.as_ref().unwrap().matches(&other.matched_text) {
-                        return Some(m);
+                    if let Some(max_val) = max {
+                        if count >= max_val {
+                            return Some(m);
+                        }
                     }
 
-                    m.accumulate(&other);
-                    curr_offset += other.matched_text.chars().count();
-                    Self::update_group_results(&mut curr_groups, &other);
                 }
                 None => {
-                    return Some(m);
-                },
+                    return if min_reached {
+                        Some(m)
+                    } else {
+                        None
+                    }
+                }
             }
         }
-    }
-
-    fn check_zero_or_one(&self,
-                         matcher: &Matcher,
-                         text: &str,
-                         offset: usize,
-                         group_results: &HashMap<usize, String>) -> Option<Match> {
-
-        let mut m = Match::new("", offset);
-        match matcher.check_match(text, offset, group_results) {
-            Some(other) => {
-                m.accumulate(&other);
-            }
-            None => {}
-        }
-
-        Some(m)
     }
 
     fn check_wildcard(&self, text: &str, offset: usize) -> Option<Match> {
@@ -468,33 +458,4 @@ pub fn make_alpha_num_matcher() -> Matcher {
     alpha_nums.push('_');
 
     Matcher::new_single_char_branch(alpha_nums.chars().collect(), false)
-}
-
-pub fn make_group_matcher(pattern: &str) -> Matcher {
-    if pattern.chars().count() < 2 {
-        panic!("Pattern must have at least two characters");
-    }
-
-    let is_negated = pattern.chars().nth(1).unwrap() == '^';
-
-    let characters = if !is_negated {
-        let num_chars = pattern.chars().count() - 2;
-        pattern
-            .chars()
-            .skip(1)
-            .take(num_chars)
-            .collect::<Vec<_>>()
-    } else {
-        let num_chars = pattern.chars().count() - 3;
-        pattern
-            .chars()
-            .skip(2)
-            .take(num_chars)
-            .collect::<Vec<_>>()
-    };
-
-    Matcher::new_single_char_branch(
-        characters,
-        is_negated,
-    )
 }

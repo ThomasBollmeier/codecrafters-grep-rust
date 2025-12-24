@@ -1,5 +1,6 @@
 use anyhow::*;
 use crate::matcher::{make_alpha_num_matcher, make_digit_matcher, Matcher};
+use crate::matcher::Matcher::Multiple;
 
 #[derive(Debug)]
 pub struct RegexParser {
@@ -94,6 +95,21 @@ impl RegexParser {
                     matchers.pop();
                     matcher
                 }
+                '{' => {
+                    let last_matcher = matchers
+                        .iter()
+                        .last()
+                        .ok_or(anyhow!("+ expects previous char"))?;
+                    let (min, max) = self.parse_quantifiers()?;
+                    let matcher = Multiple {
+                        matcher: Box::new(last_matcher.clone()),
+                        min,
+                        max,
+                        follow: None
+                    };
+                    matchers.pop();
+                    matcher
+                }
                 '.' => {
                     self.advance()?;
                     Matcher::new_wildcard()
@@ -103,28 +119,6 @@ impl RegexParser {
                     Matcher::new_single_char(ch)
                 },
             };
-            let previous_matcher = {
-                matchers.iter().last()
-            };
-
-            let new_prev_matcher = match previous_matcher {
-                Some(prev_matcher) => {
-                    match prev_matcher {
-                        Matcher::OneOrMore {
-                            matcher: m,
-                            follow: _,
-                        } => Some(Matcher::new_one_or_more(m.clone(), Some(&matcher))),
-                        Matcher::Group(matchers, group_id) =>
-                            Self::new_group_with_follow_info(matchers, *group_id, &matcher),
-                        _ => None
-                    }
-                },
-                None => None
-            };
-            if new_prev_matcher.is_some() {
-                matchers.pop();
-                matchers.push(new_prev_matcher.unwrap());
-            }
 
             matchers.push(matcher);
         }
@@ -136,39 +130,19 @@ impl RegexParser {
         }
     }
 
-    fn new_group_with_follow_info(matchers: &Vec<Matcher>,
-                                  group_idx: usize,
-                                  follow: &Matcher) -> Option<Matcher> {
-        let mut new_matchers = vec![];
-        let mut changed = false;
-
-        for matcher in matchers {
-            let new_matcher = match matcher {
-                Matcher::OneOrMore {
-                    matcher: m,
-                    follow: _,
-                } => {
-                    changed = true;
-                    Matcher::new_one_or_more(m.clone(), Some(follow))
-                }
-                Matcher::Group(matchers, group_id) => {
-                    match Self::new_group_with_follow_info(matchers, *group_id, &matcher) {
-                        Some(new_group) => {
-                            changed = true;
-                            new_group
-                        }
-                        None => matcher.clone(),
-                    }
-                }
-                _ => matcher.clone(),
-            };
-            new_matchers.push(new_matcher);
-        }
-
-        if changed {
-            Some(Matcher::new_group(new_matchers, group_idx))
-        } else {
-            None
+    fn parse_quantifiers(&mut self) -> Result<(usize, Option<usize>)> {
+        self.advance()?;
+        let mut min_str = String::new();
+        loop {
+            let ch = self.advance()?;
+            if ch.is_ascii_digit() {
+                min_str.push(ch);
+            } else if ch == '}' {
+                let min = min_str.parse::<usize>()?;
+                return Ok((min, Some(min)));
+            } else {
+                return Err(anyhow!("invalid quantifier character '{}'", ch));
+            }
         }
     }
 
@@ -398,6 +372,17 @@ mod tests {
         let m = matcher.find_match("ggler");
         assert!(m.is_some());
         assert_eq!(m.unwrap().matched_text, "ggle");
+    }
+
+    #[test]
+    fn test_quantifier() {
+        let matcher = make_matcher("ro{2}m");
+        let m = matcher.find_match("rome");
+        assert!(m.is_none());
+        let m = matcher.find_match("room");
+        assert!(m.is_some());
+        let m = matcher.find_match("vroooom");
+        assert!(m.is_none());
     }
 
     #[test]
