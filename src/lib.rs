@@ -21,15 +21,28 @@ pub struct Config {
 }
 
 pub fn process_stdin(pattern: &str) {
-    let mut input_line = String::new();
-    io::stdin().read_line(&mut input_line).unwrap();
+    let mut input_lines = vec![];
 
-    if match_pattern(&input_line, pattern) {
-        println!("{input_line}");
-        process::exit(0);
-    } else {
-        process::exit(1);
+    loop {
+        let mut buffer = String::new();
+        let bytes_read = io::stdin().read_line(&mut buffer).unwrap();
+        if bytes_read == 0 {
+            break; // EOF reached
+        }
+        input_lines.push(buffer);
     }
+
+    let mut found = false;
+
+    for input_line in input_lines {
+        let line = input_line.trim_end_matches(&['\n', '\r'][..]);
+        if match_pattern(&line, pattern) {
+            found = true;
+            println!("{line}");
+        }
+    }
+
+    process::exit(if found { 0 } else { 1 });
 }
 
 pub fn process_files_or_dirs(file_or_dirs: &[String], pattern: &str, recursive: bool) {
