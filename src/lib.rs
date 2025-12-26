@@ -1,6 +1,7 @@
 use crate::regex_parser::RegexParser;
 use clap::Parser;
 use std::{io, process};
+use crate::matcher::Match;
 
 mod matcher;
 mod regex_parser;
@@ -18,9 +19,12 @@ pub struct Config {
 
     #[arg(short, long)]
     pub recursive: bool,
+
+    #[arg(short, long)]
+    pub only_matches: bool,
 }
 
-pub fn process_stdin(pattern: &str) {
+pub fn process_stdin(pattern: &str, only_matches: bool) {
     let mut input_lines = vec![];
 
     loop {
@@ -36,16 +40,28 @@ pub fn process_stdin(pattern: &str) {
 
     for input_line in input_lines {
         let line = input_line.trim_end_matches(&['\n', '\r'][..]);
-        if match_pattern(&line, pattern) {
-            found = true;
-            println!("{line}");
+        match match_pattern(&line, pattern) {
+            Some(matched) => {
+                found = true;
+                if !only_matches {
+                    println!("{line}");
+                } else {
+                    println!("{}", matched.matched_text);
+                }
+            }
+            None => {}
         }
     }
 
     process::exit(if found { 0 } else { 1 });
 }
 
-pub fn process_files_or_dirs(file_or_dirs: &[String], pattern: &str, recursive: bool) {
+pub fn process_files_or_dirs(
+    file_or_dirs: &[String],
+    pattern: &str,
+    recursive: bool,
+    only_matches: bool,
+) {
     let mut found = false;
     let filenames: Vec<String> = if recursive {
         file_or_dirs
@@ -62,13 +78,21 @@ pub fn process_files_or_dirs(file_or_dirs: &[String], pattern: &str, recursive: 
         let file_content = std::fs::read_to_string(filename).unwrap();
 
         for line in file_content.lines() {
-            if match_pattern(line, pattern) {
-                found = true;
-                if multiple_files {
-                    println!("{filename}:{line}");
-                } else {
-                    println!("{line}");
+            match match_pattern(line, pattern) {
+                Some(matched) => {
+                    found = true;
+                    let s = if only_matches {
+                        matched.matched_text
+                    } else {
+                        line.to_string()
+                    };
+                    if multiple_files {
+                        println!("{filename}:{s}");
+                    } else {
+                        println!("{s}");
+                    }
                 }
+                None => {}
             }
         }
     }
@@ -80,10 +104,10 @@ pub fn process_files_or_dirs(file_or_dirs: &[String], pattern: &str, recursive: 
     }
 }
 
-fn match_pattern(input_line: &str, pattern: &str) -> bool {
+fn match_pattern(input_line: &str, pattern: &str) -> Option<Match> {
     match RegexParser::new(pattern).parse() {
-        Ok(matcher) => matcher.matches(&input_line),
-        Err(_) => false,
+        Ok(matcher) => matcher.find_match(&input_line),
+        Err(_) => None,
     }
 }
 
