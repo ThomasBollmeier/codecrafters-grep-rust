@@ -480,4 +480,14 @@ mod tests {
         assert_eq!(matches[1].matched_text, "33".to_string());
         assert_eq!(matches[1].offset, 22);
     }
+
+    #[test]
+    fn test_multiple_matching_lines() {
+        let matcher = make_matcher(r"\d");
+        //              "012345678901234567890123456789
+        let text = "apple\nbanana123\ncherry\ndog456\nelephant";
+        let matches = matcher.find_all_matches(text);
+        assert_eq!(matches.len(), 6);
+
+    }
 }

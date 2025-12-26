@@ -6,6 +6,13 @@ use crate::matcher::Match;
 mod matcher;
 mod regex_parser;
 
+#[derive(Debug, Clone)]
+pub enum ColorMode {
+    Always,
+    Auto,
+    Never,
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
 pub struct Config {
@@ -22,9 +29,23 @@ pub struct Config {
 
     #[arg(short, long)]
     pub only_matches: bool,
+
+    #[arg(long = "color", default_value = "never", value_parser = get_color_mode)]
+    pub color: ColorMode,
 }
 
-pub fn process_stdin(pattern: &str, only_matches: bool) {
+fn get_color_mode(s: &str) -> Result<ColorMode, String> {
+    match s {
+        "always" => Ok(ColorMode::Always),
+        "auto" => Ok(ColorMode::Auto),
+        "never" => Ok(ColorMode::Never),
+        _ => Err(format!(
+            "'{s}' is not a valid value for --color. Use 'always', 'auto', or 'never'."
+        )),
+    }
+}
+
+pub fn process_stdin(config: &Config) {
     let mut input_lines = vec![];
 
     loop {
@@ -40,21 +61,19 @@ pub fn process_stdin(pattern: &str, only_matches: bool) {
 
     for input_line in input_lines {
         let line = input_line.trim_end_matches(&['\n', '\r'][..]);
-        if !only_matches {
-            match match_pattern(&line, pattern) {
-                Some(_) => {
-                    found = true;
-                    println!("{line}");
-                }
-                None => {}
-            }
+        let matches = match_all(&line, &config.pattern);
+
+        if matches.is_empty() {
+            continue;
+        }
+
+        found = true;
+
+        if !config.only_matches {
+            println!("{}", colorize_line(&line, &matches, &config.color));
         } else {
-            let matches = match_all(&line, pattern);
-            if !matches.is_empty() {
-                found = true;
-                for m in matches {
-                    println!("{}", m.matched_text);
-                }
+            for m in matches {
+                println!("{}", m.matched_text);
             }
         }
     }
@@ -62,20 +81,15 @@ pub fn process_stdin(pattern: &str, only_matches: bool) {
     process::exit(if found { 0 } else { 1 });
 }
 
-pub fn process_files_or_dirs(
-    file_or_dirs: &[String],
-    pattern: &str,
-    recursive: bool,
-    only_matches: bool,
-) {
+pub fn process_files_or_dirs(config: &Config) {
     let mut found = false;
-    let filenames: Vec<String> = if recursive {
-        file_or_dirs
+    let filenames: Vec<String> = if config.recursive {
+        config.files_or_dirs
             .iter()
             .flat_map(|file_or_dir| get_files(file_or_dir))
             .collect()
     } else {
-        file_or_dirs.to_vec()
+        config.files_or_dirs.to_vec()
     };
 
     let multiple_files = filenames.len() > 1;
@@ -84,28 +98,24 @@ pub fn process_files_or_dirs(
         let file_content = std::fs::read_to_string(filename).unwrap();
 
         for line in file_content.lines() {
-            if !only_matches {
-                match match_pattern(line, pattern) {
-                    Some(_) => {
-                        found = true;
-                        if multiple_files {
-                            println!("{filename}:{line}");
-                        } else {
-                            println!("{line}");
-                        }
-                    }
-                    None => {}
+            let matches = match_all(line, &config.pattern);
+            if matches.is_empty() {
+                continue;
+            }
+            found = true;
+
+            if !config.only_matches {
+                if multiple_files {
+                    println!("{filename}:{}", colorize_line(line, &matches, &config.color));
+                } else {
+                    println!("{}", colorize_line(line, &matches, &config.color));
                 }
             } else {
-                let matches = match_all(line, pattern);
-                if !matches.is_empty() {
-                    found = true;
-                    for m in matches {
-                        if multiple_files {
-                            println!("{filename}:{}", m.matched_text);
-                        } else {
-                            println!("{}", m.matched_text);
-                        }
+                for m in matches {
+                    if multiple_files {
+                        println!("{filename}:{}", m.matched_text);
+                    } else {
+                        println!("{}", m.matched_text);
                     }
                 }
             }
@@ -119,11 +129,26 @@ pub fn process_files_or_dirs(
     }
 }
 
-fn match_pattern(input_line: &str, pattern: &str) -> Option<Match> {
-    RegexParser::new(pattern)
-        .parse()
-        .ok()
-        .and_then(|m| m.find_match(input_line))
+fn colorize_line(line: &str, matches: &Vec<Match>, color_mode: &ColorMode) -> String {
+    match color_mode {
+        ColorMode::Always => {
+            let mut colored_line = String::new();
+            let mut last_index = 0;
+
+            for m in matches {
+                let start = m.offset;
+                let end = start + m.matched_text.len();
+                colored_line.push_str(&line[last_index..start]);
+                colored_line.push_str("\x1b[1;31m"); // Start red color in bold
+                colored_line.push_str(&line[start..end]);
+                colored_line.push_str("\x1b[0m"); // Reset color
+                last_index = end;
+            }
+            colored_line.push_str(&line[last_index..]);
+            colored_line
+        }
+        _ => line.to_string(),
+    }
 }
 
 fn match_all(input_line: &str, pattern: &str) -> Vec<Match> {

@@ -11,12 +11,7 @@ fn main() {
     }
 
     match config.files_or_dirs.len() {
-        0 => process_stdin(&config.pattern, config.only_matches),
-        _ => process_files_or_dirs(
-            &config.files_or_dirs,
-            &config.pattern,
-            config.recursive,
-            config.only_matches,
-        ),
+        0 => process_stdin(&config),
+        _ => process_files_or_dirs(&config),
     }
 }
