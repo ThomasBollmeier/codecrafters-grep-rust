@@ -130,24 +130,29 @@ pub fn process_files_or_dirs(config: &Config) {
 }
 
 fn colorize_line(line: &str, matches: &Vec<Match>, color_mode: &ColorMode) -> String {
-    match color_mode {
-        ColorMode::Always => {
-            let mut colored_line = String::new();
-            let mut last_index = 0;
+    let do_colorize = match color_mode {
+        ColorMode::Always => true,
+        ColorMode::Auto => atty::is(atty::Stream::Stdout),
+        ColorMode::Never => false,
+    };
 
-            for m in matches {
-                let start = m.offset;
-                let end = start + m.matched_text.len();
-                colored_line.push_str(&line[last_index..start]);
-                colored_line.push_str("\x1b[1;31m"); // Start red color in bold
-                colored_line.push_str(&line[start..end]);
-                colored_line.push_str("\x1b[0m"); // Reset color
-                last_index = end;
-            }
-            colored_line.push_str(&line[last_index..]);
-            colored_line
+    if do_colorize {
+        let mut colored_line = String::new();
+        let mut last_index = 0;
+
+        for m in matches {
+            let start = m.offset;
+            let end = start + m.matched_text.len();
+            colored_line.push_str(&line[last_index..start]);
+            colored_line.push_str("\x1b[1;31m"); // Start red color in bold
+            colored_line.push_str(&line[start..end]);
+            colored_line.push_str("\x1b[0m"); // Reset color
+            last_index = end;
         }
-        _ => line.to_string(),
+        colored_line.push_str(&line[last_index..]);
+        colored_line
+    } else {
+        line.to_string()
     }
 }
 
