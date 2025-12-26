@@ -466,4 +466,18 @@ mod tests {
         let m = matcher.find_match("abc-def is abc-def, not efg, abc, or def");
         assert!(m.is_some());
     }
+
+    #[test]
+    fn test_multiple_matches() {
+        let matcher = make_matcher(r"\d{2}");
+        //              "012345678901234567890123456789
+        let text = "I have 222 apples and 33 bananas.";
+        let matches = matcher.find_all_matches(text);
+
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].matched_text, "22".to_string());
+        assert_eq!(matches[0].offset, 7);
+        assert_eq!(matches[1].matched_text, "33".to_string());
+        assert_eq!(matches[1].offset, 22);
+    }
 }

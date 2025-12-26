@@ -40,16 +40,22 @@ pub fn process_stdin(pattern: &str, only_matches: bool) {
 
     for input_line in input_lines {
         let line = input_line.trim_end_matches(&['\n', '\r'][..]);
-        match match_pattern(&line, pattern) {
-            Some(matched) => {
-                found = true;
-                if !only_matches {
+        if !only_matches {
+            match match_pattern(&line, pattern) {
+                Some(_) => {
+                    found = true;
                     println!("{line}");
-                } else {
-                    println!("{}", matched.matched_text);
+                }
+                None => {}
+            }
+        } else {
+            let matches = match_all(&line, pattern);
+            if !matches.is_empty() {
+                found = true;
+                for m in matches {
+                    println!("{}", m.matched_text);
                 }
             }
-            None => {}
         }
     }
 
@@ -78,21 +84,30 @@ pub fn process_files_or_dirs(
         let file_content = std::fs::read_to_string(filename).unwrap();
 
         for line in file_content.lines() {
-            match match_pattern(line, pattern) {
-                Some(matched) => {
+            if !only_matches {
+                match match_pattern(line, pattern) {
+                    Some(_) => {
+                        found = true;
+                        if multiple_files {
+                            println!("{filename}:{line}");
+                        } else {
+                            println!("{line}");
+                        }
+                    }
+                    None => {}
+                }
+            } else {
+                let matches = match_all(line, pattern);
+                if !matches.is_empty() {
                     found = true;
-                    let s = if only_matches {
-                        matched.matched_text
-                    } else {
-                        line.to_string()
-                    };
-                    if multiple_files {
-                        println!("{filename}:{s}");
-                    } else {
-                        println!("{s}");
+                    for m in matches {
+                        if multiple_files {
+                            println!("{filename}:{}", m.matched_text);
+                        } else {
+                            println!("{}", m.matched_text);
+                        }
                     }
                 }
-                None => {}
             }
         }
     }
@@ -105,10 +120,17 @@ pub fn process_files_or_dirs(
 }
 
 fn match_pattern(input_line: &str, pattern: &str) -> Option<Match> {
-    match RegexParser::new(pattern).parse() {
-        Ok(matcher) => matcher.find_match(&input_line),
-        Err(_) => None,
-    }
+    RegexParser::new(pattern)
+        .parse()
+        .ok()
+        .and_then(|m| m.find_match(input_line))
+}
+
+fn match_all(input_line: &str, pattern: &str) -> Vec<Match> {
+    RegexParser::new(pattern)
+        .parse()
+        .ok()
+        .map_or(vec![], |m| m.find_all_matches(input_line))
 }
 
 fn get_files(file_or_dir: &str) -> Vec<String> {

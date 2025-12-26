@@ -126,6 +126,21 @@ impl Matcher {
         None
     }
 
+    pub fn find_all_matches(&self, text: &str) -> Vec<Match> {
+        let mut ret = vec![];
+        let mut offset = 0;
+        while offset < text.chars().count() {
+            match self.check_match(text, offset, &HashMap::new()) {
+                Some(m) => {
+                    offset += m.matched_text.chars().count();
+                    ret.push(m);
+                }
+                None => offset += 1,
+            }
+        }
+        ret
+    }
+
     fn is_mergeable_with(&self, other: &Matcher) -> bool {
         use Matcher::*;
         match (self, other) {
